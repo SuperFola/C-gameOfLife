@@ -5,9 +5,14 @@
 #include <unistd.h>
 #include <errno.h>
 
-#define WIDTH 16
+#define WIDTH 32
 #define ARRAY_SIZE (WIDTH * WIDTH)
+#define LOWER_BITS 0b00001111
+#define UPPER_BITS 0b11110000
+#define ALL_ALIVE  0b00010001
+#define SWAP_ALIVE 0b00010000
 
+// sleep for specified number of milliseconds
 int msleep(long msec)
 {
     struct timespec ts;
@@ -36,6 +41,7 @@ struct Data
     unsigned turns;
 };
 
+// load a model from a file
 Data* init_from_file(const char *filename)
 {
     FILE *file;
@@ -46,6 +52,9 @@ Data* init_from_file(const char *filename)
         unsigned long x = 0;
         for (char c = fgetc(file); !feof(file); c = fgetc(file))
         {
+            if (x > 0 && x < WIDTH - 1 && y > 0 && y < WIDTH - 1)
+                data->content[y * WIDTH + x] = (c != '*') ? 0 : ALL_ALIVE;
+            
             if (c == '\n')
             {
                 y++;
@@ -53,8 +62,6 @@ Data* init_from_file(const char *filename)
             }
             else
                 x++;
-            
-            data->content[y * WIDTH + x] = (c == '#' || c == ' ') ? 0 : 17;
         }
         fclose(file);
         return data;
@@ -66,6 +73,7 @@ Data* init_from_file(const char *filename)
     }
 }
 
+// init with a random grid
 Data* init()
 {
     srand((unsigned) time(NULL));
@@ -82,29 +90,43 @@ Data* init()
     return data;
 }
 
+// count neighbours of a given cell
 char get_neigh(Data *data, unsigned long x, unsigned long y)
 {
-    return  (data->content[y       * WIDTH + (x + 1)] & 15) +
-            (data->content[y       * WIDTH + (x - 1)] & 15) +
-            (data->content[(y + 1) * WIDTH +  x     ] & 15) +
-            (data->content[(y - 1) * WIDTH +  x     ] & 15) ;
+    return  (data->content[y       * WIDTH + (x + 1)] & LOWER_BITS) +
+            (data->content[y       * WIDTH + (x - 1)] & LOWER_BITS) +
+            (data->content[(y + 1) * WIDTH +  x     ] & LOWER_BITS) +
+            (data->content[(y - 1) * WIDTH +  x     ] & LOWER_BITS) +
+
+            (data->content[(y - 1) * WIDTH + (x + 1)] & LOWER_BITS) +
+            (data->content[(y - 1) * WIDTH + (x - 1)] & LOWER_BITS) +
+            (data->content[(y + 1) * WIDTH + (x + 1)] & LOWER_BITS) +
+            (data->content[(y + 1) * WIDTH + (x - 1)] & LOWER_BITS) ;
+}
+
+char get_val(Data *data, unsigned long x, unsigned long y)
+{
+    return data->content[y * WIDTH + x] & LOWER_BITS;
 }
 
 void set_val(Data *data, unsigned long x, unsigned long y, char val)
 {
-    unsigned long pos = y * WIDTH + x;
-    if (val)
-        data->content[pos] |= 16;
-    else  // keep only the lowest 4 seven bits to zero out the swap
-        data->content[pos] &= 15;
+    // only set values if we can
+    if (x > 0 && x < WIDTH - 1 && y > 0 && y < WIDTH - 1)
+    {
+        unsigned long pos = y * WIDTH + x;
+        if (val)
+            data->content[pos] |= SWAP_ALIVE;
+        else  // keep only the lowest 4 seven bits to zero out the swap
+            data->content[pos] &= LOWER_BITS;
+    }
 }
 
+// swap the temp buffer and the current buffer
 void swap_vals(Data *data)
 {
     for (unsigned long i = 0; i < ARRAY_SIZE; ++i)
-    {
-        data->content[i] = (data->content[i] & 240) >> 4;
-    }
+        data->content[i] = (data->content[i] & UPPER_BITS) >> 4;
 }
 
 void display(Data *data)
@@ -119,10 +141,10 @@ void display(Data *data)
         if (i != 0)
             printf((i % WIDTH) == 0 ? "\n" : " ");
 
-        if (x == 0 || x == WIDTH - 1 || y == 0 || y == WIDTH - 1)
+        if ((x == 0 || x == WIDTH - 1 || y == 0 || y == WIDTH - 1) && (data->content[i] & LOWER_BITS) == 0)
             printf("#");
         else
-            printf("%c", (data->content[i] & 7) > 0 ? '*' : ' ');
+            printf("%c", (data->content[i] & LOWER_BITS) > 0 ? '*' : ' ');
     }
     printf("\n");
 }
@@ -145,16 +167,21 @@ int main(int argc, char **argv)
         display(data);
         printf("Turn: %u/%u\n", current, data->turns);
 
-        for (unsigned long x = 1; x < WIDTH - 1; ++x)
+        for (unsigned long x = 0; x < WIDTH; ++x)
         {
-            for (unsigned long y = 1; y < WIDTH - 1; ++y)
+            for (unsigned long y = 0; y < WIDTH; ++y)
             {
                 char n = get_neigh(data, x, y);
+                char v = get_val(data, x, y);
 
-                if (n == 0 || n == 4)
-                    set_val(data, x, y, 0);
-                else if (n == 2 || n == 3)
+                // printf("x: %lu y: %lu v: %u n: %u\n", x, y, v, n);
+
+                if ((n == 2 || n == 3) && v == 1)
                     set_val(data, x, y, 1);
+                else if (n == 3 && v == 0)
+                    set_val(data, x, y, 1);
+                else
+                    set_val(data, x, y, 0);
             }
         }
 
